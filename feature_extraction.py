@@ -85,14 +85,14 @@ def bow_extraction():
     for patch in patches:
         patch.crop()  # 获取切片图像
         des = patch.get_sift()
-        if des:
+        if des is not None:
             valid_patches.append(patch)
     descriptors = np.vstack([patch.descriptor for patch in valid_patches])
     kmeans = MiniBatchKMeans(n_clusters=K, batch_size=minibatch_size, random_state=None, verbose=1)
     kmeans.fit(descriptors)
     joblib.dump(kmeans, "kmeans_codebook.pkl")
     for patch in valid_patches:
-        patch.get_BoW(kmeans)
+        patch.get_bow(kmeans)
 
 def get_train_data():
     train_X = [] # feature vector
