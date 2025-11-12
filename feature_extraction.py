@@ -1,15 +1,19 @@
+import gc
 import numpy as np
 from sklearn.cluster import MiniBatchKMeans
 import cv2
 import joblib
 
 patches = []
-sift = cv2.SIFT_create()
 K = 400
 minibatch_size = 1000
+BATCH_DESC = 40000
+sift = cv2.SIFT_create(nfeatures=500)
 
 class Patch:
     def __init__(self,path, c1, c2, label,iou, split):
+        if c1 is None or c2 is None or label is None or iou is None or split is None:
+            raise TypeError
         self.c1, self.c2, self.label, self.path, self.iou, self.split = c1, c2, label, path, float(iou), split
         self.img = None # will be generated after crop
         self.keypoints = None
@@ -59,15 +63,6 @@ class Patch:
         cv2.waitKey(0)
         cv2.destroyAllWindows()
 
-    def get_bow(self, visual_dictionary):
-        if self.descriptor is None or len(self.descriptor) == 0:
-            self.bow_histogram = None
-            return
-        word_ids = visual_dictionary.predict(self.descriptor)
-        hist, _ = np.histogram(word_ids, bins=np.arange(K + 1))
-        self.bow_histogram = hist
-# 获取csv保存的patches
-
 def get_patches(csvfile, num=None):
     new_patches = []
     with open(csvfile, 'r', newline='') as f:
@@ -75,42 +70,65 @@ def get_patches(csvfile, num=None):
         print(f"Start getting patches from {csvfile}...")
         for idx in range(1, min(num, len(lines)) if num is not None else len(lines)):
             line = lines[idx].split(',')
-            # optimize below
-            line[1] = (int(line[1]), int(line[2]))
-            line[3] = (int(line[3]), int(line[4]))
-            del line[2]
-            del line[3]
+            # slice to coordinates
+            line[1:5] = [(int(float(line[1])), int(float(line[2]))), (int(float(line[3])), int(float(line[4])))]
             new_patches.append(Patch(*line))
-            print(f"patch{idx + 1} recieved, current patch: {idx + 1}/{len(lines)}")
+
+            print(f"patch{idx + 1} recieved, current patch: {idx + 1}/{len(lines)}. Patch is:{line[1:]}, pic location is:{line[0]}.")
         print(f"Finished! All patches from {csvfile} received")
     return new_patches
 
-def bow_extraction(patches):
-    valid_patches = []
-    print("Computing sift feature...")
-    for index, patch in enumerate(patches):
-        patch.crop()  # 获取切片图像
-        des = patch.get_sift()
-        if des is not None:
-            valid_patches.append(patch)
-            print(f"patch{index}'s sift finished. Current patch: {index}/{len(patches)}")
-    descriptors = np.vstack([patch.descriptor for patch in valid_patches])
-    kmeans = MiniBatchKMeans(n_clusters=K, batch_size=minibatch_size, random_state=None, verbose=1)
-    print("Constructing kmeans...")
-    kmeans.fit(descriptors)
-    joblib.dump(kmeans, "kmeans_codebook.pkl")
-    print("Computing BoW vectors...")
-    for patch in valid_patches:
-        patch.get_bow(kmeans)
+def train_codebook_stream(patches, K=400):
+    kmeans = MiniBatchKMeans(n_clusters=K, batch_size=minibatch_size, reassignment_ratio=0.01, verbose=1)
+    buf = []
+    total = 0
+    for i, p in enumerate(patches):
+        img = p.crop_gray()
+        if img is None or img.size == 0:
+            continue
+        kp, des = sift.detectAndCompute(img, None)
+        del img, kp
+        if des is not None and len(des):
+            buf.append(des)
+            total += len(des)
+        if sum(len(x) for x in buf) >= BATCH_DESC:
+            kmeans.partial_fit(np.vstack(buf))
+            buf.clear()
+            gc.collect()
+        del des
+        if (i+1) % 2000 == 0:
+            print(f'[partial_fit] processed {i+1} patches, descriptors so far ~{total}')
+    if buf:
+        kmeans.partial_fit(np.vstack(buf))
+        buf.clear()
+    joblib.dump(kmeans, 'kmeans_codebook.pkl')
+    print('Codebook trained & saved.')
+    return kmeans
+
+def compute_bow(patches, kmeans):
+    print('Computing BoW...')
+    for i, p in enumerate(patches):
+        img = p.crop_gray()
+        if img is None or img.size == 0:
+            p.bow_histogram = None
+            continue
+        kp, des = sift.detectAndCompute(img, None)
+        del img, kp
+        if des is None or len(des) == 0:
+            p.bow_histogram = np.zeros(kmeans.n_clusters, dtype=np.float32)
+        else:
+            idx = kmeans.predict(des)
+            hist, _ = np.histogram(idx, bins=np.arange(kmeans.n_clusters+1), density=True)
+            p.bow_histogram = hist.astype(np.float32)
+        del des
+        if (i+1) % 2000 == 0:
+            print(f'[BoW] {i+1}/{len(patches)}')
+        gc.collect()
 
 def get_train_data(patches):
-    train_X = [] # feature vector
-    train_Y = [] # label
-    for patch in patches:
-        if patch.bow_histogram is None:
-            continue
-        train_X.append(patch.bow_histogram)
-        train_Y.append(int(patch.label))
-        X = np.array(train_X)
-        Y = np.array(train_Y)
-    return X, Y
+    X, Y = [], []
+    for p in patches:
+        if p.bow_histogram is not None:
+            X.append(p.bow_histogram)
+            Y.append(p.label)
+    return np.asarray(X, dtype=np.float32), np.asarray(Y, dtype=np.int32)

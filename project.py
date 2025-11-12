@@ -15,23 +15,24 @@ def test(clf, patches):
     print("Confusion matrix:")
     print(confusion_matrix(y_val, y_pred))
 
-csvfile = "train_small.csv"
+csvfile = "train.csv"
 clf_path = "svm_model.joblib"
 
 # # Train
-# train_patches = get_patches(csvfile,10000)
-# bow_extraction(train_patches)
-# x, y = get_train_data(train_patches)
+patches = get_patches(csvfile)
+kmeans = train_codebook_stream(patches, K)
+compute_bow(patches, kmeans)
+X, Y = get_train_data(patches)
 
 # Save model
-# clf = svm(x,y)
-# save_model(clf,clf_path)
+clf = svm(X, Y)
+save_model(clf,clf_path)
 
 # smoke test
-csvfile = "valid.csv"
-valid_patches = get_patches(csvfile, 5000)
-bow_extraction(valid_patches)
-st_clf = load_model(clf_path)
-print("Start testing SVM...")
-test(st_clf,valid_patches)
-print("Finished testing SVM...")
+# csvfile = "valid.csv"
+# valid_patches = get_patches(csvfile, 5000)
+# bow_extraction(valid_patches)
+# st_clf = load_model(clf_path)
+# print("Start testing SVM...")
+# test(st_clf,valid_patches)
+# print("Finished testing SVM...")

@@ -3,8 +3,8 @@ import cv2
 old_src = "D:\\COMP9517\\project\\" # 给scv文件里候选框文件位置的前缀
 dest_src = "/Users/mrcfreeman/lecture/9517/proj/9517/" #自己电脑的测试集的目录前缀
 
-given_scvfile_path = "../valid.csv"
-self_scvfile_path = "../valid.csv"
+given_scvfile_path = "../train.csv"
+self_scvfile_path = "../train.csv"
 
 def change_src():
     with open(given_scvfile_path, 'r', newline='') as csvfile:
