@@ -24,8 +24,10 @@ class Patch:
         print(self.path, self.c1, self.c2, self.label, self.iou, self.split)
 
     # crop patch in image
-    def crop(self):
-        img = cv2.imread(self.path)
+    def crop_gray(self):
+        img = cv2.imread(self.path, cv2.IMREAD_GRAYSCALE)
+        if img is None:
+            return None
         x1, y1 = self.c1
         x2, y2 = self.c2
         # prevent
@@ -33,6 +35,7 @@ class Patch:
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w, x2), min(h, y2)
         self.img = img[y1:y2, x1:x2]
+        return self.img
 
     def get_sift(self):
         if self.img is None:
@@ -64,19 +67,21 @@ class Patch:
         cv2.destroyAllWindows()
 
 def get_patches(csvfile, num=None):
-    new_patches = []
+    out = []
     with open(csvfile, 'r', newline='') as f:
         lines = f.readlines()
         print(f"Start getting patches from {csvfile}...")
         for idx in range(1, min(num, len(lines)) if num is not None else len(lines)):
             line = lines[idx].split(',')
             # slice to coordinates
-            line[1:5] = [(int(float(line[1])), int(float(line[2]))), (int(float(line[3])), int(float(line[4])))]
-            new_patches.append(Patch(*line))
+            c1 = (int(float(line[1])), int(float(line[2])))
+            c2 = (int(float(line[3])), int(float(line[4])))
+            path, label, iou, split = line[0], line[5], line[6], line[7]
+            out.append(Patch(path, c1, c2, label, iou, split))
 
             print(f"patch{idx + 1} recieved, current patch: {idx + 1}/{len(lines)}. Patch is:{line[1:]}, pic location is:{line[0]}.")
         print(f"Finished! All patches from {csvfile} received")
-    return new_patches
+    return out
 
 def train_codebook_stream(patches, K=400):
     kmeans = MiniBatchKMeans(n_clusters=K, batch_size=minibatch_size, reassignment_ratio=0.01, verbose=1)
@@ -108,7 +113,7 @@ def train_codebook_stream(patches, K=400):
 def compute_bow(patches, kmeans):
     print('Computing BoW...')
     for i, p in enumerate(patches):
-        img = p.crop_gray()
+        img = p.crop()
         if img is None or img.size == 0:
             p.bow_histogram = None
             continue
