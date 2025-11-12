@@ -83,29 +83,54 @@ def get_patches(csvfile, num=None):
         print(f"Finished! All patches from {csvfile} received")
     return out
 
-def train_codebook_stream(patches, K=400):
-    kmeans = MiniBatchKMeans(n_clusters=K, batch_size=minibatch_size, reassignment_ratio=0.01, verbose=1)
-    buf = []
-    total = 0
-    for i, p in enumerate(patches):
+def train_codebook_stream(patches, K=400, batch_desc=20000, checkpoint_every=5):
+    kmeans = MiniBatchKMeans(
+        n_clusters=K,
+        batch_size=minibatch_size,
+        reassignment_ratio=0.01,
+        max_no_improvement=20,
+        verbose=1
+    )
+
+    buf = np.empty((0, 128), dtype=np.float32)
+    desc_used = 0
+    pf_count = 0
+
+    for i, p in enumerate(patches, 1):
         img = p.crop_gray()
         if img is None or img.size == 0:
             continue
-        kp, des = sift.detectAndCompute(img, None)
-        del img, kp
-        if des is not None and len(des):
-            buf.append(des)
-            total += len(des)
-        if sum(len(x) for x in buf) >= BATCH_DESC:
-            kmeans.partial_fit(np.vstack(buf))
-            buf.clear()
-            gc.collect()
+        _, des = sift.detectAndCompute(img, None)
+        del img  # 及时释放
+        if des is None or len(des) == 0:
+            continue
+
+        # 追加到缓冲
+        if buf.shape[0] == 0:
+            buf = des.astype(np.float32, copy=False)
+        else:
+            buf = np.vstack((buf, des))
+
+        desc_used += len(des)
         del des
-        if (i+1) % 2000 == 0:
-            print(f'[partial_fit] processed {i+1} patches, descriptors so far ~{total}')
-    if buf:
-        kmeans.partial_fit(np.vstack(buf))
-        buf.clear()
+
+        if buf.shape[0] >= batch_desc:
+            kmeans.partial_fit(buf)
+            pf_count += 1
+            print(f'[partial_fit] used {desc_used} descriptors; batch {pf_count}')
+            buf = np.empty((0, 128), dtype=np.float32)  # 重新分配空数组
+            if pf_count % checkpoint_every == 0:
+                joblib.dump(kmeans, f'kmeans_codebook_ckpt_{pf_count}.pkl')
+            gc.collect()
+
+    # 处理最后一批
+    if buf.shape[0] > 0:
+        kmeans.partial_fit(buf)
+        pf_count += 1
+        print(f'[partial_fit] final batch; total descriptors used {desc_used}')
+        buf = np.empty((0, 128), dtype=np.float32)
+        gc.collect()
+
     joblib.dump(kmeans, 'kmeans_codebook.pkl')
     print('Codebook trained & saved.')
     return kmeans
